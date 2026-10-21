@@ -18,10 +18,10 @@ VENV_DIR = os.path.join(APP_DIR, "venv")
 CACHE_FILE = os.path.join(APP_DIR, "lookup-cache.json")
 LOG_FILE = os.path.join(APP_DIR, "renames.log")
 
-AUDIO_EXT = {".m4b", ".m4a", ".mp3", ".flac", ".ogg", ".opus", ".aac"}
+AUDIO_EXT = {".m4b", ".m4a", ".mp4", ".mp3", ".flac", ".ogg", ".opus", ".aac"}
 BOOK_EXT = {".epub", ".pdf", ".mobi", ".azw3"}
 MEDIA_EXT = AUDIO_EXT | BOOK_EXT
-SINGLE_FILE_AUDIO = {".m4b", ".m4a"}
+SINGLE_FILE_AUDIO = {".m4b", ".m4a", ".mp4"}
 JUNK_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 SKIP_DIRS = {"lost+found", "System Volume Information", "$RECYCLE.BIN"}
 
