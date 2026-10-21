@@ -198,10 +198,7 @@ def tag_fixes(path):
     return f, changes
 
 
-def run_fix_tags(root, test, yes):
-    if mutagen is None:
-        print("mutagen is required for --fix-tags")
-        sys.exit(1)
+def collect_tag_fixes(root):
     pending = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(root):
@@ -214,11 +211,41 @@ def run_fix_tags(root, test, yes):
             result = tag_fixes(path)
             if result and result[1]:
                 pending.append((path, result[0], result[1]))
+    return pending, scanned
+
+
+def print_tag_fixes(pending, root):
     for path, _, changes in pending:
         print("")
         print("  " + rel(path, root))
         for key, old, new in changes:
             print("    " + key + ": " + repr(old) + " -> " + repr(new))
+
+
+def apply_tag_fixes(pending, root):
+    os.makedirs(APP_DIR, exist_ok=True)
+    done = 0
+    errors = 0
+    with open(LOG_FILE, "a", encoding="utf-8") as log:
+        log.write("# " + time.strftime("%Y-%m-%d %H:%M:%S") + " tags " + root + "\n")
+        for path, f, changes in pending:
+            try:
+                f.save()
+                for key, old, new in changes:
+                    log.write("TAG\t" + path + "\t" + key + "\t" + repr(old) + "\t" + repr(new) + "\n")
+                done += 1
+            except Exception as exc:
+                errors += 1
+                print("Failed: " + rel(path, root) + ": " + str(exc))
+    return done, errors
+
+
+def run_fix_tags(root, test, yes):
+    if mutagen is None:
+        print("mutagen is required for --fix-tags")
+        sys.exit(1)
+    pending, scanned = collect_tag_fixes(root)
+    print_tag_fixes(pending, root)
     print("")
     print(str(len(pending)) + " of " + str(scanned) + " audio files need tag fixes")
     if test:
@@ -235,20 +262,7 @@ def run_fix_tags(root, test, yes):
         if answer not in ("y", "yes"):
             print("Cancelled")
             return
-    os.makedirs(APP_DIR, exist_ok=True)
-    done = 0
-    errors = 0
-    with open(LOG_FILE, "a", encoding="utf-8") as log:
-        log.write("# " + time.strftime("%Y-%m-%d %H:%M:%S") + " tags " + root + "\n")
-        for path, f, changes in pending:
-            try:
-                f.save()
-                for key, old, new in changes:
-                    log.write("TAG\t" + path + "\t" + key + "\t" + repr(old) + "\t" + repr(new) + "\n")
-                done += 1
-            except Exception as exc:
-                errors += 1
-                print("Failed: " + rel(path, root) + ": " + str(exc))
+    done, errors = apply_tag_fixes(pending, root)
     print("Fixed " + str(done) + " files" + (", " + str(errors) + " failed" if errors else ""))
     print("Log: " + LOG_FILE)
 
@@ -707,7 +721,7 @@ def main():
     ap.add_argument("path", nargs="?", help="share or folder to scan (prompts if omitted)")
     ap.add_argument("-t", "--test", action="store_true", help="dry run, change nothing")
     ap.add_argument("-y", "--yes", action="store_true", help="apply without confirmation")
-    ap.add_argument("--fix-tags", action="store_true", help="clean mapped characters out of audio file tags, then exit")
+    ap.add_argument("--fix-tags", action="store_true", help="only clean mapped characters out of audio file tags, then exit")
     ap.add_argument("--no-lookup", action="store_true", help="do not query Audible for missing series info")
     args = ap.parse_args()
 
@@ -797,21 +811,34 @@ def main():
             name = rel(p.group.items[0][0], root)
             print("  " + name + ": " + p.note)
 
+    tag_pending = []
+    if mutagen is not None:
+        tag_pending, _ = collect_tag_fixes(root)
+    if tag_pending:
+        print("")
+        print("Tag fixes:")
+        print_tag_fixes(tag_pending, root)
+        print("")
+        print(str(len(tag_pending)) + " audio files need tag fixes")
+
     if args.test:
         print("")
         print("Dry run, nothing was changed")
         return
-    if not changes:
+    if not changes and not tag_pending:
         return
     if not args.yes:
         try:
-            answer = input("\nApply " + str(len(changes)) + " renames in " + root + "? [y/N] ").strip().lower()
+            answer = input("\nApply " + str(len(changes)) + " renames and " + str(len(tag_pending)) + " tag fixes in " + root + "? [y/N] ").strip().lower()
         except EOFError:
             answer = ""
         if answer not in ("y", "yes"):
             print("Cancelled")
             return
 
+    if tag_pending:
+        fixed, tag_errors = apply_tag_fixes(tag_pending, root)
+        print("Fixed tags in " + str(fixed) + " files" + (", " + str(tag_errors) + " failed" if tag_errors else ""))
     os.makedirs(APP_DIR, exist_ok=True)
     done = 0
     errors = 0
