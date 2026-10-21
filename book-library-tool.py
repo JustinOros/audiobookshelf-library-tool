@@ -133,6 +133,124 @@ MAPPED_CHARS[0xFF1A] = " - "
 MAPPED_CHARS[0xA789] = " - "
 
 
+TAG_CHARS = {
+    0xF020: '"',
+    0xF021: "*",
+    0xF022: ":",
+    0xF023: "<",
+    0xF024: ">",
+    0xF025: "?",
+    0xF026: "",
+    0xF027: "|",
+}
+
+
+def clean_tag_text(value):
+    return value.translate(TAG_CHARS)
+
+
+def clean_values(values):
+    out = []
+    found = []
+    for v in values:
+        if isinstance(v, str):
+            c = clean_tag_text(v)
+            if c != v:
+                found.append((v, c))
+            out.append(c)
+        else:
+            out.append(v)
+    return out, found
+
+
+def tag_fixes(path):
+    if mutagen is None:
+        return None
+    try:
+        f = mutagen.File(path)
+    except Exception:
+        return None
+    if f is None or f.tags is None:
+        return None
+    tags = f.tags
+    changes = []
+    if hasattr(tags, "getall"):
+        for key in list(tags.keys()):
+            frame = tags[key]
+            text = getattr(frame, "text", None)
+            if not isinstance(text, list):
+                continue
+            new, found = clean_values(text)
+            if found:
+                frame.text = new
+                changes.extend((key, o, n) for o, n in found)
+    else:
+        for key in list(tags.keys()):
+            vals = tags[key]
+            if not isinstance(vals, list):
+                continue
+            new, found = clean_values(vals)
+            if found:
+                tags[key] = new
+                changes.extend((str(key), o, n) for o, n in found)
+    return f, changes
+
+
+def run_fix_tags(root, test, yes):
+    if mutagen is None:
+        print("mutagen is required for --fix-tags")
+        sys.exit(1)
+    pending = []
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted([d for d in dirnames if not skip_dir(d)], key=nat)
+        for name in sorted(filenames, key=nat):
+            if name.startswith(".") or os.path.splitext(name)[1].lower() not in AUDIO_EXT:
+                continue
+            path = os.path.join(dirpath, name)
+            scanned += 1
+            result = tag_fixes(path)
+            if result and result[1]:
+                pending.append((path, result[0], result[1]))
+    for path, _, changes in pending:
+        print("")
+        print("  " + rel(path, root))
+        for key, old, new in changes:
+            print("    " + key + ": " + repr(old) + " -> " + repr(new))
+    print("")
+    print(str(len(pending)) + " of " + str(scanned) + " audio files need tag fixes")
+    if test:
+        print("")
+        print("Dry run, nothing was changed")
+        return
+    if not pending:
+        return
+    if not yes:
+        try:
+            answer = input("\nWrite tag fixes to " + str(len(pending)) + " files in " + root + "? [y/N] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes"):
+            print("Cancelled")
+            return
+    os.makedirs(APP_DIR, exist_ok=True)
+    done = 0
+    errors = 0
+    with open(LOG_FILE, "a", encoding="utf-8") as log:
+        log.write("# " + time.strftime("%Y-%m-%d %H:%M:%S") + " tags " + root + "\n")
+        for path, f, changes in pending:
+            try:
+                f.save()
+                for key, old, new in changes:
+                    log.write("TAG\t" + path + "\t" + key + "\t" + repr(old) + "\t" + repr(new) + "\n")
+                done += 1
+            except Exception as exc:
+                errors += 1
+                print("Failed: " + rel(path, root) + ": " + str(exc))
+    print("Fixed " + str(done) + " files" + (", " + str(errors) + " failed" if errors else ""))
+    print("Log: " + LOG_FILE)
+
+
 def safe(name):
     name = name.translate(MAPPED_CHARS)
     name = re.sub(r"[\u0000-\u001f\u007f]", "", name)
@@ -587,6 +705,7 @@ def main():
     ap.add_argument("path", nargs="?", help="share or folder to scan (prompts if omitted)")
     ap.add_argument("-t", "--test", action="store_true", help="dry run, change nothing")
     ap.add_argument("-y", "--yes", action="store_true", help="apply without confirmation")
+    ap.add_argument("--fix-tags", action="store_true", help="clean mapped characters out of audio file tags, then exit")
     ap.add_argument("--no-lookup", action="store_true", help="do not query Audible for missing series info")
     args = ap.parse_args()
 
@@ -595,6 +714,11 @@ def main():
     if not os.path.isdir(root):
         print("Not a folder: " + root)
         sys.exit(1)
+
+    if args.fix_tags:
+        print(("DRY RUN: " if args.test else "") + "Checking tags in " + root)
+        run_fix_tags(root, args.test, args.yes)
+        return
 
     print(("DRY RUN: " if args.test else "") + "Scanning " + root)
     if mutagen is None:
