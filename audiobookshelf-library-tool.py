@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -13,14 +14,21 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
-APP_DIR = os.path.join(os.path.expanduser("~"), ".book-library-tool")
+APP_DIR = os.path.join(os.path.expanduser("~"), ".audiobookshelf-library-tool")
+OLD_APP_DIR = os.path.join(os.path.expanduser("~"), ".book-library-tool")
 VENV_DIR = os.path.join(APP_DIR, "venv")
 CACHE_FILE = os.path.join(APP_DIR, "lookup-cache.json")
 LOG_FILE = os.path.join(APP_DIR, "renames.log")
 
-AUDIO_EXT = {".m4b", ".m4a", ".mp4", ".mp3", ".flac", ".ogg", ".opus", ".aac"}
-BOOK_EXT = {".epub", ".pdf", ".mobi", ".azw3"}
+AUDIO_EXT = {".m4b", ".m4a", ".mp4", ".mp3", ".flac", ".ogg", ".oga", ".opus", ".aac", ".wav", ".wma", ".aiff", ".mka", ".webm", ".webma", ".awb", ".caf"}
+BOOK_EXT = {".epub", ".pdf", ".mobi", ".azw3", ".cbz", ".cbr"}
 MEDIA_EXT = AUDIO_EXT | BOOK_EXT
+KEEP_EXT = {".jpg", ".jpeg", ".png", ".webp", ".opf", ".nfo", ".cue"}
+KEEP_NAMES = {"metadata.json", "metadata.abs", "desc.txt", "reader.txt"}
+DRM_EXT = {".aax", ".aaxc", ".aa", ".m4p"}
+PROTECT_EXT = {".aax", ".aaxc", ".aa", ".m4p", ".zip", ".rar", ".7z", ".tar", ".gz", ".mkv", ".avi", ".mov", ".m4v", ".wmv"}
+JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
+DISC_EXT = {".bin", ".iso", ".img", ".mdf", ".chd", ".ccd", ".sub"}
 SINGLE_FILE_AUDIO = {".m4b", ".m4a", ".mp4"}
 JUNK_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 SKIP_DIRS = {"lost+found", "System Volume Information", "$RECYCLE.BIN"}
@@ -36,6 +44,21 @@ JUNK_TITLE_RE = re.compile(
     r"\s*[\(\[]\s*(?:unabridged|abridged|audiobook|dramatized adaptation)\s*[\)\]]\s*$",
     re.I,
 )
+
+
+def migrate_app_dir():
+    if os.path.isdir(OLD_APP_DIR) and not os.path.exists(APP_DIR):
+        try:
+            os.makedirs(APP_DIR)
+            for name in ("lookup-cache.json", "renames.log"):
+                src = os.path.join(OLD_APP_DIR, name)
+                if os.path.exists(src):
+                    shutil.copy2(src, os.path.join(APP_DIR, name))
+        except OSError:
+            pass
+
+
+migrate_app_dir()
 
 
 def bootstrap():
@@ -198,7 +221,7 @@ def tag_fixes(path):
     return f, changes
 
 
-def collect_tag_fixes(root):
+def collect_tag_fixes(root, exclude=()):
     pending = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(root):
@@ -207,6 +230,8 @@ def collect_tag_fixes(root):
             if name.startswith(".") or os.path.splitext(name)[1].lower() not in AUDIO_EXT:
                 continue
             path = os.path.join(dirpath, name)
+            if path in exclude:
+                continue
             scanned += 1
             result = tag_fixes(path)
             if result and result[1]:
@@ -238,6 +263,116 @@ def apply_tag_fixes(pending, root):
                 errors += 1
                 print("Failed: " + rel(path, root) + ": " + str(exc))
     return done, errors
+
+
+def file_digest(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1048576), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def keep_rank(root, path):
+    parts = os.path.relpath(os.path.dirname(path), root).split(os.sep)
+    has_vol = any(VOL_RE.match(p) for p in parts)
+    return (0 if has_vol else 1, -len(parts), nat(os.path.relpath(path, root)))
+
+
+def find_duplicates(root):
+    by_size = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not skip_dir(d)]
+        for name in filenames:
+            ext = os.path.splitext(name)[1].lower()
+            if name.startswith(".") or ext not in MEDIA_EXT:
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            if size > 0:
+                by_size.setdefault((ext, size), []).append(path)
+    groups = []
+    for paths in by_size.values():
+        if len(paths) < 2:
+            continue
+        by_hash = {}
+        for path in paths:
+            try:
+                by_hash.setdefault(file_digest(path), []).append(path)
+            except OSError:
+                continue
+        for same in by_hash.values():
+            if len(same) > 1:
+                same = sorted(same, key=lambda x: keep_rank(root, x))
+                groups.append((same[0], same[1:]))
+    groups.sort(key=lambda g: nat(g[0]))
+    return groups
+
+
+def find_unsupported(root):
+    media_dirs = set()
+    listing = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted([d for d in dirnames if not skip_dir(d)], key=nat)
+        listing.append((dirpath, filenames))
+        if any(
+            not f.startswith(".") and os.path.splitext(f)[1].lower() in MEDIA_EXT
+            for f in filenames
+        ):
+            media_dirs.add(dirpath)
+    eligible = set()
+    for d in media_dirs:
+        cur = d
+        while True:
+            eligible.add(cur)
+            if cur == root or cur == os.path.dirname(cur):
+                break
+            cur = os.path.dirname(cur)
+    remove = []
+    protected = []
+    for dirpath, filenames in listing:
+        if dirpath not in eligible:
+            protected.extend(
+                os.path.join(dirpath, f)
+                for f in sorted(filenames, key=nat)
+                if os.path.splitext(f)[1].lower() in DRM_EXT
+            )
+            continue
+        exts = {os.path.splitext(f)[1].lower() for f in filenames}
+        if exts & DISC_EXT:
+            continue
+        for f in sorted(filenames, key=nat):
+            low = f.lower()
+            ext = os.path.splitext(f)[1].lower()
+            path = os.path.join(dirpath, f)
+            if low in JUNK_NAMES or f.startswith("._"):
+                remove.append(path)
+            elif ext in MEDIA_EXT or ext in KEEP_EXT or low in KEEP_NAMES:
+                continue
+            elif ext in PROTECT_EXT:
+                protected.append(path)
+            elif f.startswith("."):
+                continue
+            else:
+                remove.append(path)
+    return remove, protected
+
+
+def find_cues(root):
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted([d for d in dirnames if not skip_dir(d)], key=nat)
+        cues = [f for f in filenames if f.lower().endswith(".cue") and not f.startswith(".")]
+        if not cues:
+            continue
+        exts = {os.path.splitext(f)[1].lower() for f in filenames}
+        if exts & DISC_EXT or not exts & AUDIO_EXT:
+            continue
+        found.extend(os.path.join(dirpath, f) for f in sorted(cues, key=nat))
+    return found
 
 
 def run_fix_tags(root, test, yes):
@@ -402,7 +537,7 @@ def audible_lookup(title, author, cache):
         params["author"] = author
     url = "https://api.audible.com/1.0/catalog/products?" + urllib.parse.urlencode(params)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "book-library-tool"})
+        req = urllib.request.Request(url, headers={"User-Agent": "audiobookshelf-library-tool"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except Exception:
@@ -454,10 +589,11 @@ def skip_dir(name):
     return name.startswith((".", "@", "#")) or name in SKIP_DIRS
 
 
-def scan(root):
+def scan(root, exclude=()):
     media_dirs = {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted([d for d in dirnames if not skip_dir(d)], key=nat)
+        filenames = [f for f in filenames if os.path.join(dirpath, f) not in exclude]
         media = [
             f
             for f in filenames
@@ -715,13 +851,16 @@ def rel(p, root):
 
 def main():
     ap = argparse.ArgumentParser(
-        prog="book-library-tool.py",
-        description="Rename audiobook and ebook libraries to Author/Series/Vol N - Title/Title.ext",
+        prog="audiobookshelf-library-tool.py",
+        description="Clean up and rename an Audiobookshelf library to Author/Series/Vol N - Title/Title.ext",
     )
     ap.add_argument("path", nargs="?", help="share or folder to scan (prompts if omitted)")
     ap.add_argument("-t", "--test", action="store_true", help="dry run, change nothing")
     ap.add_argument("-y", "--yes", action="store_true", help="apply without confirmation")
     ap.add_argument("--fix-tags", action="store_true", help="only clean mapped characters out of audio file tags, then exit")
+    ap.add_argument("--keep-duplicates", action="store_true", help="do not look for or remove identical duplicate files")
+    ap.add_argument("--keep-unsupported", action="store_true", help="do not remove files Audiobookshelf cannot use")
+    ap.add_argument("--keep-cue", action="store_true", help="do not remove .cue files")
     ap.add_argument("--no-lookup", action="store_true", help="do not query Audible for missing series info")
     args = ap.parse_args()
 
@@ -739,8 +878,25 @@ def main():
     print(("DRY RUN: " if args.test else "") + "Scanning " + root)
     if mutagen is None:
         print("mutagen not available, reading folder names and Audible only")
-    groups = scan(root)
-    if not groups:
+    exclude = set()
+    dup_groups = []
+    cue_files = []
+    if not args.keep_duplicates:
+        print("Checking for duplicates")
+        dup_groups = find_duplicates(root)
+        for _, drops in dup_groups:
+            exclude.update(drops)
+    if not args.keep_cue:
+        cue_files = find_cues(root)
+        exclude.update(cue_files)
+    unsupported = []
+    protected = []
+    if not args.keep_unsupported:
+        unsupported, protected = find_unsupported(root)
+        exclude.update(unsupported)
+    deletions = sum(len(drops) for _, drops in dup_groups) + len(cue_files) + len(unsupported)
+    groups = scan(root, exclude)
+    if not groups and not deletions:
         print("No audio or ebook files found")
         return
     print("Found " + str(len(groups)) + " books, reading metadata")
@@ -811,9 +967,33 @@ def main():
             name = rel(p.group.items[0][0], root)
             print("  " + name + ": " + p.note)
 
+    if dup_groups:
+        print("")
+        print("Duplicates (identical files):")
+        for keep, drops in dup_groups:
+            print("  keep    " + rel(keep, root))
+            for d in drops:
+                print("  remove  " + rel(d, root))
+    if cue_files:
+        print("")
+        print(".cue files to remove:")
+        for c in cue_files:
+            print("  remove  " + rel(c, root))
+
+    if unsupported:
+        print("")
+        print("Unsupported files to remove:")
+        for u in unsupported:
+            print("  remove  " + rel(u, root))
+    if protected:
+        print("")
+        print("Not removed, but Audiobookshelf cannot use these:")
+        for u in protected:
+            print("  " + rel(u, root))
+
     tag_pending = []
     if mutagen is not None:
-        tag_pending, _ = collect_tag_fixes(root)
+        tag_pending, _ = collect_tag_fixes(root, exclude)
     if tag_pending:
         print("")
         print("Tag fixes:")
@@ -825,24 +1005,52 @@ def main():
         print("")
         print("Dry run, nothing was changed")
         return
-    if not changes and not tag_pending:
+    if not changes and not tag_pending and not deletions:
         return
     if not args.yes:
         try:
-            answer = input("\nApply " + str(len(changes)) + " renames and " + str(len(tag_pending)) + " tag fixes in " + root + "? [y/N] ").strip().lower()
+            answer = input("\nApply " + str(len(changes)) + " renames, " + str(len(tag_pending)) + " tag fixes and " + str(deletions) + " deletions in " + root + "? [y/N] ").strip().lower()
         except EOFError:
             answer = ""
         if answer not in ("y", "yes"):
             print("Cancelled")
             return
 
+    deleted_dirs = set()
+    removed = 0
+    if deletions:
+        os.makedirs(APP_DIR, exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as log:
+            log.write("# " + time.strftime("%Y-%m-%d %H:%M:%S") + " deletions " + root + "\n")
+            for keep, drops in dup_groups:
+                if not os.path.exists(keep):
+                    continue
+                for d in drops:
+                    try:
+                        if os.path.getsize(d) != os.path.getsize(keep):
+                            continue
+                        os.remove(d)
+                        log.write("DELETE\t" + d + "\tduplicate of\t" + keep + "\n")
+                        deleted_dirs.add(os.path.dirname(d))
+                        removed += 1
+                    except OSError as exc:
+                        print("Failed: " + rel(d, root) + ": " + str(exc))
+            for c in cue_files + unsupported:
+                try:
+                    os.remove(c)
+                    log.write("DELETE\t" + c + "\tunsupported\n")
+                    deleted_dirs.add(os.path.dirname(c))
+                    removed += 1
+                except OSError as exc:
+                    print("Failed: " + rel(c, root) + ": " + str(exc))
+        print("Removed " + str(removed) + " files")
     if tag_pending:
         fixed, tag_errors = apply_tag_fixes(tag_pending, root)
         print("Fixed tags in " + str(fixed) + " files" + (", " + str(tag_errors) + " failed" if tag_errors else ""))
     os.makedirs(APP_DIR, exist_ok=True)
     done = 0
     errors = 0
-    src_dirs = set()
+    src_dirs = set(deleted_dirs)
     with open(LOG_FILE, "a", encoding="utf-8") as log:
         log.write("# " + time.strftime("%Y-%m-%d %H:%M:%S") + " " + root + "\n")
         for p in changes:
