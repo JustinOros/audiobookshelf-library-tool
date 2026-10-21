@@ -127,7 +127,15 @@ def clean_author(name):
     return name or None
 
 
+MAPPED_CHARS = dict.fromkeys(range(0xF020, 0xF028), None)
+MAPPED_CHARS[0xF022] = " - "
+MAPPED_CHARS[0xFF1A] = " - "
+MAPPED_CHARS[0xA789] = " - "
+
+
 def safe(name):
+    name = name.translate(MAPPED_CHARS)
+    name = re.sub(r"[\u0000-\u001f\u007f]", "", name)
     name = name.replace(":", " - ")
     name = re.sub(r'[\\/*?"<>|]', "", name)
     name = re.sub(r"\s+", " ", name).strip()
