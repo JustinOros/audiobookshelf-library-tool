@@ -29,6 +29,8 @@ python3 audiobookshelf-library-tool.py --fix-tags -t
 | `--keep-duplicates` | Do not look for or remove identical duplicate files |
 | `--keep-cue` | Do not remove `.cue` files |
 | `--keep-unsupported` | Do not remove files Audiobookshelf cannot use |
+| `--strip-text TEXT` | Also remove this text from inside epubs. Can be repeated |
+| `--no-strip` | Do not remove watermark text from inside epubs |
 | `--no-lookup` | Skip the Audible lookup for missing series info |
 
 With no path, the picker lists mounted shares. If any share name contains "book", only those are shown.
@@ -64,8 +66,6 @@ A normal run also cleans up the library. The dry run lists everything first, and
 - `.nfo`, `.opf`, `metadata.json`, `desc.txt` and `reader.txt`
 
 Audible `.aax`, `.aaxc`, `.aa` and `.m4p` files, archives (`.zip`, `.rar`, `.7z`) and video are never removed. They are listed so you can convert or extract them. Cleanup only happens in folders that contain books, so a ROMs share is left alone.
-
-Deletions cannot be undone. Use `-t` first.
 
 ## Setup
 

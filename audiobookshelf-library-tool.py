@@ -31,6 +31,8 @@ JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
 DISC_EXT = {".bin", ".iso", ".img", ".mdf", ".chd", ".ccd", ".sub"}
 SINGLE_FILE_AUDIO = {".m4b", ".m4a", ".mp4"}
 JUNK_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
+STRIP_TEXT = ["OceanofPDF.com"]
+TEXT_MEMBER_EXT = {".xhtml", ".html", ".htm", ".xml", ".opf", ".ncx", ".svg", ".css"}
 SKIP_DIRS = {"lost+found", "System Volume Information", "$RECYCLE.BIN"}
 
 VOL_RE = re.compile(
@@ -400,6 +402,88 @@ def run_fix_tags(root, test, yes):
     done, errors = apply_tag_fixes(pending, root)
     print("Fixed " + str(done) + " files" + (", " + str(errors) + " failed" if errors else ""))
     print("Log: " + LOG_FILE)
+
+
+def epub_strip_counts(path, patterns):
+    counts = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            for info in z.infolist():
+                if os.path.splitext(info.filename)[1].lower() not in TEXT_MEMBER_EXT:
+                    continue
+                data = z.read(info.filename)
+                for pat in patterns:
+                    n = len(pat.findall(data))
+                    if n:
+                        key = pat.pattern.decode("utf-8").replace("\\", "")
+                        counts[key] = counts.get(key, 0) + n
+    except (zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError):
+        return {}
+    return counts
+
+
+def collect_epub_strips(root, texts, exclude=()):
+    patterns = [re.compile(re.escape(t.encode("utf-8")), re.I) for t in texts]
+    pending = []
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted([d for d in dirnames if not skip_dir(d)], key=nat)
+        for name in sorted(filenames, key=nat):
+            if name.startswith(".") or os.path.splitext(name)[1].lower() != ".epub":
+                continue
+            path = os.path.join(dirpath, name)
+            if path in exclude:
+                continue
+            scanned += 1
+            counts = epub_strip_counts(path, patterns)
+            if counts:
+                pending.append((path, counts))
+    return pending, scanned, patterns
+
+
+def rewrite_epub(path, patterns):
+    tmp = path + ".strip-tmp"
+    try:
+        with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w") as zout:
+            for info in zin.infolist():
+                data = zin.read(info.filename)
+                if os.path.splitext(info.filename)[1].lower() in TEXT_MEMBER_EXT:
+                    for pat in patterns:
+                        data = pat.sub(b"", data)
+                zout.writestr(info, data, compress_type=info.compress_type)
+        with zipfile.ZipFile(tmp) as check:
+            if check.testzip() is not None:
+                raise OSError("rewritten epub failed verification")
+        shutil.copystat(path, tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def print_epub_strips(pending, root):
+    for path, counts in pending:
+        print("  " + rel(path, root) + ": " + ", ".join(str(n) + "x " + k for k, n in counts.items()))
+
+
+def apply_epub_strips(pending, patterns, root):
+    done = 0
+    errors = 0
+    os.makedirs(APP_DIR, exist_ok=True)
+    with open(LOG_FILE, "a", encoding="utf-8") as log:
+        log.write("# " + time.strftime("%Y-%m-%d %H:%M:%S") + " strip text " + root + "\n")
+        for path, counts in pending:
+            try:
+                rewrite_epub(path, patterns)
+                log.write("STRIP\t" + path + "\t" + json.dumps(counts) + "\n")
+                done += 1
+            except Exception as exc:
+                errors += 1
+                print("Failed: " + rel(path, root) + ": " + str(exc))
+    return done, errors
 
 
 def safe(name):
@@ -861,6 +945,8 @@ def main():
     ap.add_argument("--keep-duplicates", action="store_true", help="do not look for or remove identical duplicate files")
     ap.add_argument("--keep-unsupported", action="store_true", help="do not remove files Audiobookshelf cannot use")
     ap.add_argument("--keep-cue", action="store_true", help="do not remove .cue files")
+    ap.add_argument("--strip-text", action="append", default=[], metavar="TEXT", help="also remove this text from inside epub files (repeatable)")
+    ap.add_argument("--no-strip", action="store_true", help="do not remove watermark text from inside epub files")
     ap.add_argument("--no-lookup", action="store_true", help="do not query Audible for missing series info")
     args = ap.parse_args()
 
@@ -1001,15 +1087,28 @@ def main():
         print("")
         print(str(len(tag_pending)) + " audio files need tag fixes")
 
+    strip_pending = []
+    strip_patterns = []
+    if not args.no_strip:
+        strip_texts = STRIP_TEXT + args.strip_text
+        print("Checking epubs for " + ", ".join(strip_texts))
+        strip_pending, epub_count, strip_patterns = collect_epub_strips(root, strip_texts, exclude)
+        if strip_pending:
+            print("")
+            print("Epub text to remove:")
+            print_epub_strips(strip_pending, root)
+            print("")
+            print(str(len(strip_pending)) + " of " + str(epub_count) + " epubs contain text to remove")
+
     if args.test:
         print("")
         print("Dry run, nothing was changed")
         return
-    if not changes and not tag_pending and not deletions:
+    if not changes and not tag_pending and not deletions and not strip_pending:
         return
     if not args.yes:
         try:
-            answer = input("\nApply " + str(len(changes)) + " renames, " + str(len(tag_pending)) + " tag fixes and " + str(deletions) + " deletions in " + root + "? [y/N] ").strip().lower()
+            answer = input("\nApply " + str(len(changes)) + " renames, " + str(len(tag_pending)) + " tag fixes, " + str(len(strip_pending)) + " epub text edits and " + str(deletions) + " deletions in " + root + "? [y/N] ").strip().lower()
         except EOFError:
             answer = ""
         if answer not in ("y", "yes"):
@@ -1044,6 +1143,9 @@ def main():
                 except OSError as exc:
                     print("Failed: " + rel(c, root) + ": " + str(exc))
         print("Removed " + str(removed) + " files")
+    if strip_pending:
+        stripped, strip_errors = apply_epub_strips(strip_pending, strip_patterns, root)
+        print("Cleaned text in " + str(stripped) + " epubs" + (", " + str(strip_errors) + " failed" if strip_errors else ""))
     if tag_pending:
         fixed, tag_errors = apply_tag_fixes(tag_pending, root)
         print("Fixed tags in " + str(fixed) + " files" + (", " + str(tag_errors) + " failed" if tag_errors else ""))
