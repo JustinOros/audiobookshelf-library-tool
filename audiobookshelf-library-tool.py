@@ -40,8 +40,9 @@ VOL_RE = re.compile(
     re.I,
 )
 PART_RE = re.compile(
-    r"[\s._-]*[\(\[]?\s*(?:part|pt|disc|disk|cd)\s*\d+\s*[\)\]]?$", re.I
+    r"[\s._-]*[\(\[]?\s*(?:part|pt|disc|disk|cd)\s*\d+(?:\s*of\s*\d+)?\s*[\)\]]?$", re.I
 )
+PART_NUM_RE = re.compile(r"(?:part|pt|disc|disk|cd)\s*(\d+)", re.I)
 JUNK_TITLE_RE = re.compile(
     r"\s*[\(\[]\s*(?:unabridged|abridged|audiobook|dramatized adaptation)\s*[\)\]]\s*$",
     re.I,
@@ -665,6 +666,8 @@ class Plan:
         self.index = None
         self.title = None
         self.moves = []
+        self.part = None
+        self.dupes = []
         self.status = "pending"
         self.note = ""
 
@@ -799,6 +802,51 @@ def resolve(root, g, use_lookup, cache):
     return plan
 
 
+def plan_part_number(plan):
+    path = plan.group.items[0][0]
+    m = PART_NUM_RE.search(os.path.splitext(os.path.basename(path))[0])
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def merge_parts(plans):
+    buckets = {}
+    for p in plans:
+        if p.status != "pending" or len(p.group.items) != 1:
+            continue
+        if p.group.items[0][1] not in AUDIO_EXT:
+            continue
+        n = plan_part_number(p)
+        if n is None:
+            continue
+        key = (norm(p.author), norm(p.series or ""), p.index, norm(p.title))
+        buckets.setdefault(key, []).append((n, p))
+    for entries in buckets.values():
+        nums = [n for n, _ in entries]
+        if len(entries) < 2 or len(set(nums)) != len(nums):
+            continue
+        for n, p in entries:
+            p.part = n
+
+
+def drop_shared_sidecars(plans):
+    claimed = {}
+    for p in plans:
+        if p.part is None or p.status != "pending":
+            continue
+        kept = []
+        for src, dst in p.moves:
+            owner = claimed.get(dst.lower())
+            if os.path.splitext(src)[1].lower() in AUDIO_EXT or owner is None:
+                kept.append((src, dst))
+            else:
+                p.dupes.append((src, owner))
+        p.moves = kept
+        for _, dst in p.moves:
+            claimed.setdefault(dst.lower(), dst)
+
+
 def build_moves(root, plan):
     g = plan.group
     folder = safe(
@@ -815,7 +863,10 @@ def build_moves(root, plan):
     moves = []
     base = safe(plan.title)
     for n, (path, ext, _) in enumerate(audio, 1):
-        name = base + ext if len(audio) == 1 else base + " - Part " + str(n) + ext
+        if plan.part is not None:
+            name = base + " - Part " + str(plan.part) + ext
+        else:
+            name = base + ext if len(audio) == 1 else base + " - Part " + str(n) + ext
         moves.append((path, os.path.join(target_dir, name)))
     for path, ext, _ in others:
         moves.append((path, os.path.join(target_dir, base + ext)))
@@ -991,12 +1042,15 @@ def main():
     plans = []
     for i, g in enumerate(groups, 1):
         plan = resolve(root, g, not args.no_lookup, cache)
-        if plan.status == "pending":
-            plan.moves = build_moves(root, plan)
         plans.append(plan)
         if not args.no_lookup and i % 10 == 0:
             save_cache(cache)
     save_cache(cache)
+    merge_parts(plans)
+    for plan in plans:
+        if plan.status == "pending":
+            plan.moves = build_moves(root, plan)
+    drop_shared_sidecars(plans)
 
     dst_owner = {}
     for p in plans:
@@ -1163,6 +1217,14 @@ def main():
                     src_dirs.add(os.path.dirname(src))
                     do_move(src, dst)
                     log.write(src + "\t" + dst + "\n")
+                for src, keep in p.dupes:
+                    try:
+                        if os.path.exists(src) and os.path.exists(keep) and os.path.getsize(src) == os.path.getsize(keep):
+                            os.remove(src)
+                            src_dirs.add(os.path.dirname(src))
+                            log.write("DELETE\t" + src + "\tduplicate of\t" + keep + "\n")
+                    except OSError:
+                        pass
                 done += 1
             except Exception as exc:
                 errors += 1

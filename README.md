@@ -9,7 +9,7 @@ Author/Series/Vol N - Title/Title.ext
 Author/Title/Title.ext
 ```
 
-Multi-file books become `Title - Part 1.m4b`, `Title - Part 2.m4b`.
+Multi-file books become `Title - Part 1.m4b`, `Title - Part 2.m4b`. Books split into separate folders such as `Title (Part 1 of 2)` and `Title (Part 2 of 2)` are merged into one folder.
 
 ## Usage
 
@@ -66,6 +66,10 @@ A normal run also cleans up the library. The dry run lists everything first, and
 - `.nfo`, `.opf`, `metadata.json`, `desc.txt` and `reader.txt`
 
 Audible `.aax`, `.aaxc`, `.aa` and `.m4p` files, archives (`.zip`, `.rar`, `.7z`) and video are never removed. They are listed so you can convert or extract them. Cleanup only happens in folders that contain books, so a ROMs share is left alone.
+
+**Epub watermark text.** `OceanofPDF.com` is removed from inside every epub (book text, metadata and navigation files, case-insensitive). Only epubs that contain it are rewritten, and each rewrite is verified before it replaces the original. Add more strings with `--strip-text`, or skip this step with `--no-strip`.
+
+Deletions and epub text edits cannot be undone. Use `-t` first.
 
 ## Setup
 
