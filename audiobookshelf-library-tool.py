@@ -639,7 +639,7 @@ def title_score(a, b, loose=False):
 
 
 def audible_search(params, title, author):
-    base = {"num_results": "10", "response_groups": "series,contributors,product_attrs"}
+    base = {"num_results": "10", "response_groups": "series,contributors,product_desc"}
     base.update(params)
     if author:
         base["author"] = author
@@ -657,7 +657,11 @@ def audible_search(params, title, author):
         names = [a.get("name", "") for a in p.get("authors", [])]
         if author and not any(author.split()[-1].lower() in n.lower() for n in names):
             continue
-        score = title_score(clean_title(p.get("title", "")), title, loose=not author)
+        main_title = clean_title(p.get("title", "")) or ""
+        sub = (p.get("subtitle") or "").strip()
+        score = title_score(main_title, title, loose=not author)
+        if sub:
+            score = max(score, title_score(main_title + ": " + sub, title, loose=not author))
         if score < 0.85 or score <= best:
             continue
         best = score
@@ -671,7 +675,7 @@ def audible_search(params, title, author):
 
 
 def audible_lookup(title, author, cache):
-    key = "v3|" + norm(title) + "|" + norm(author)
+    key = "v4|" + norm(title) + "|" + norm(author)
     if key in cache:
         return cache[key]
     result, ok = audible_search({"title": title}, title, author)
@@ -692,7 +696,7 @@ def audible_by_asin(asin, cache):
     if cache.get(key) is not None:
         return cache[key]
     url = "https://api.audible.com/1.0/catalog/products/" + asin + "?" + urllib.parse.urlencode(
-        {"response_groups": "series,contributors,product_attrs"}
+        {"response_groups": "series,contributors,product_desc"}
     )
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "audiobookshelf-library-tool"})
@@ -705,7 +709,10 @@ def audible_by_asin(asin, cache):
     result = None
     if p:
         names = [a.get("name", "") for a in p.get("authors", []) if a.get("name")]
-        result = {"series": None, "index": None, "author": names[0] if names else None, "title": p.get("title")}
+        full = p.get("title") or ""
+        if full and (p.get("subtitle") or "").strip():
+            full = full + ": " + p["subtitle"].strip()
+        result = {"series": None, "index": None, "author": names[0] if names else None, "title": full or None}
         series = p.get("series") or []
         if series:
             result["series"] = series[0].get("title")
