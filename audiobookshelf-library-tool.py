@@ -724,13 +724,19 @@ def audible_by_asin(asin, cache):
     result = None
     if p:
         names = [a.get("name", "") for a in p.get("authors", []) if a.get("name")]
-        full = p.get("title") or ""
-        if full and (p.get("subtitle") or "").strip():
-            full = full + ": " + p["subtitle"].strip()
-        result = {"series": None, "index": None, "author": names[0] if names else None, "title": full or None}
         series = p.get("series") or []
+        full = p.get("title") or ""
+        sub = (p.get("subtitle") or "").strip()
+        series_name = series[0].get("title") if series else None
+        series_sub = bool(sub) and (
+            bool(re.search(r"\bbook\s+\w+$", sub, re.I))
+            or bool(series_name and norm(series_name) in norm(sub))
+        )
+        if full and sub and not series_sub:
+            full = full + ": " + sub
+        result = {"series": None, "index": None, "author": names[0] if names else None, "title": full or None}
         if series:
-            result["series"] = series[0].get("title")
+            result["series"] = series_name
             result["index"] = parse_index(series[0].get("sequence"))
     if result is not None:
         cache[key] = result
