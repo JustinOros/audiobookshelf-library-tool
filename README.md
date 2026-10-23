@@ -43,7 +43,7 @@ In order:
 
 1. File tags (m4b, m4a, mp4, mp3, flac and others) and epub metadata (Calibre and EPUB3 series tags)
 2. Folder and file names
-3. Audible catalog lookup
+3. Audible catalog lookup, by the `[ASIN]` in the folder or file name when there is one, otherwise by title
 
 A `.pdf` companion next to an audiobook moves with it and takes the same name. Folders named `Audiobooks`, `Books` and similar are never used as an author, and trailing ids like `[B0794BXZBF]` are dropped from titles. Cover images and other files next to a book move with it, and emptied folders are removed. Books that cannot be resolved are skipped and listed under "Needs attention".
 

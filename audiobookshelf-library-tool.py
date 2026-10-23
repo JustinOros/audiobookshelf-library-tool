@@ -43,6 +43,7 @@ PART_RE = re.compile(
     r"[\s._-]*[\(\[]?\s*(?:part|pt|disc|disk|cd)\s*\d+(?:\s*of\s*\d+)?\s*[\)\]]?$", re.I
 )
 ID_TAIL_RE = re.compile(r"\s*\[(?:B0[0-9A-Z]{8}|[0-9]{9}[0-9Xx])\]\s*$")
+ASIN_RE = re.compile(r"\[(B0[0-9A-Z]{8}|[0-9]{9}[0-9Xx])\]")
 NOISE_DIRS = {"audiobooks", "audiobook", "books", "ebooks", "library", "audible", "libation", "audio"}
 PART_NUM_RE = re.compile(r"(?:part|pt|disc|disk|cd)\s*(\d+)", re.I)
 JUNK_TITLE_RE = re.compile(
@@ -619,7 +620,7 @@ def audible_lookup(title, author, cache):
     params = {
         "title": title,
         "num_results": "10",
-        "response_groups": "series,contributors",
+        "response_groups": "series,contributors,product_attrs",
     }
     if author:
         params["author"] = author
@@ -651,6 +652,43 @@ def audible_lookup(title, author, cache):
         result = entry
     cache[key] = result
     return result
+
+
+def audible_by_asin(asin, cache):
+    key = "asin:" + asin
+    if key in cache:
+        return cache[key]
+    url = "https://api.audible.com/1.0/catalog/products/" + asin + "?" + urllib.parse.urlencode(
+        {"response_groups": "series,contributors,product_attrs"}
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "audiobookshelf-library-tool"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+    time.sleep(0.25)
+    p = data.get("product") or {}
+    result = None
+    if p:
+        names = [a.get("name", "") for a in p.get("authors", []) if a.get("name")]
+        result = {"series": None, "index": None, "author": names[0] if names else None, "title": p.get("title")}
+        series = p.get("series") or []
+        if series:
+            result["series"] = series[0].get("title")
+            result["index"] = parse_index(series[0].get("sequence"))
+    cache[key] = result
+    return result
+
+
+def find_asin(g):
+    names = [os.path.basename(g.directory)]
+    names.extend(os.path.basename(path) for path, _, _ in g.items)
+    for name in names:
+        m = ASIN_RE.search(name)
+        if m:
+            return m.group(1)
+    return None
 
 
 class Group:
@@ -782,6 +820,7 @@ def resolve(root, g, use_lookup, cache):
         title = pick("title") or pick("album")
     guess = path_guess(root, g)
     title = strip_part(clean_title(title)) if title else None
+    tag_title = bool(title)
     title = title or clean_title(guess["title"])
     author = clean_author(pick("author")) or clean_author(guess["author"])
     series = pick("series") or guess["series"]
@@ -790,7 +829,18 @@ def resolve(root, g, use_lookup, cache):
         series = None
     if series and author and norm(series) == norm(author):
         series = None
-    if use_lookup and title and (series is None or index is None):
+    asin = find_asin(g) if use_lookup else None
+    if asin:
+        known = audible_by_asin(asin, cache)
+        if known:
+            if not author:
+                author = clean_author(known["author"])
+            if series is None and known["series"]:
+                series = known["series"]
+                index = index or known["index"]
+            if not tag_title and known["title"]:
+                title = strip_part(clean_title(known["title"])) or title
+    if use_lookup and title and (series is None or index is None or author is None):
         found = audible_lookup(title, author, cache)
         if found:
             if series is None and found["series"]:
