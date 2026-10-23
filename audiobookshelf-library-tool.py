@@ -672,7 +672,7 @@ def audible_search(params, title, author):
 
 def audible_lookup(title, author, cache):
     key = norm(title) + "|" + norm(author)
-    if key in cache:
+    if cache.get(key) is not None:
         return cache[key]
     result, ok = audible_search({"title": title}, title, author)
     if not ok:
@@ -683,13 +683,14 @@ def audible_lookup(title, author, cache):
             result, ok = audible_search({"keywords": core}, title, author)
             if not ok:
                 return None
-    cache[key] = result
+    if result is not None:
+        cache[key] = result
     return result
 
 
 def audible_by_asin(asin, cache):
     key = "asin:" + asin
-    if key in cache:
+    if cache.get(key) is not None:
         return cache[key]
     url = "https://api.audible.com/1.0/catalog/products/" + asin + "?" + urllib.parse.urlencode(
         {"response_groups": "series,contributors,product_attrs"}
@@ -710,7 +711,8 @@ def audible_by_asin(asin, cache):
         if series:
             result["series"] = series[0].get("title")
             result["index"] = parse_index(series[0].get("sequence"))
-    cache[key] = result
+    if result is not None:
+        cache[key] = result
     return result
 
 
