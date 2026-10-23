@@ -154,10 +154,11 @@ def split_series_suffix(t):
     return t[: m.start()].rstrip(), name, parse_index(m.group(2))
 
 
-def clean_title(t):
+def clean_title(t, keep_suffix=False):
     if not t:
         return None
-    t = split_series_suffix(t)[0]
+    if not keep_suffix:
+        t = split_series_suffix(t)[0]
     t = ID_TAIL_RE.sub("", t)
     t = re.sub(r"(?<=\S)_\s+", ": ", t)
     t = JUNK_TITLE_RE.sub("", t)
@@ -763,6 +764,7 @@ class Plan:
         self.title = None
         self.moves = []
         self.part = None
+        self.raw_title = None
         self.dupes = []
         self.status = "pending"
         self.note = ""
@@ -875,6 +877,8 @@ def resolve(root, g, use_lookup, cache):
         title = pick("title") or pick("album")
     guess = path_guess(root, g)
     _, hint_series, hint_index = split_series_suffix(ID_TAIL_RE.sub("", title or guess["title"] or ""))
+    raw_source = title or guess["title"]
+    raw_title = strip_part(clean_title(raw_source, keep_suffix=True) or "") or None
     title = strip_part(clean_title(title)) if title else None
     tag_title = bool(title)
     title = title or clean_title(guess["title"])
@@ -927,6 +931,7 @@ def resolve(root, g, use_lookup, cache):
         plan.note = "no title found"
         return plan
     plan.author, plan.series, plan.index, plan.title = author, series, index, title
+    plan.raw_title = raw_title if (tag_title or not asin) else None
     if series and index is None:
         plan.note = "series found but no volume number"
     return plan
@@ -975,6 +980,19 @@ def drop_shared_sidecars(plans):
         p.moves = kept
         for _, dst in p.moves:
             claimed.setdefault(dst.lower(), dst)
+
+
+def keep_existing_names(root, plan):
+    raw = plan.raw_title
+    if not raw or raw == plan.title:
+        return
+    saved = plan.title
+    plan.title = raw
+    moves = build_moves(root, plan)
+    if all(same_path(s, d) for s, d in moves):
+        plan.moves = moves
+    else:
+        plan.title = saved
 
 
 def build_moves(root, plan):
@@ -1180,6 +1198,7 @@ def main():
     for plan in plans:
         if plan.status == "pending":
             plan.moves = build_moves(root, plan)
+            keep_existing_names(root, plan)
     drop_shared_sidecars(plans)
 
     dst_owner = {}
