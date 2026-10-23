@@ -1252,7 +1252,8 @@ def main():
 
     strip_pending = []
     strip_patterns = []
-    if not args.no_strip:
+    has_epub = any(ext == ".epub" for g in groups for _, ext, _ in g.items)
+    if not args.no_strip and has_epub:
         strip_texts = STRIP_TEXT + args.strip_text
         print("Checking epubs for " + ", ".join(strip_texts))
         strip_pending, epub_count, strip_patterns = collect_epub_strips(root, strip_texts, exclude)
