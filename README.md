@@ -45,7 +45,7 @@ In order:
 2. Folder and file names
 3. Audible catalog lookup
 
-Cover images and other files next to a book move with it, and emptied folders are removed. Books that cannot be resolved are skipped and listed under "Needs attention".
+A `.pdf` companion next to an audiobook moves with it and takes the same name. Folders named `Audiobooks`, `Books` and similar are never used as an author, and trailing ids like `[B0794BXZBF]` are dropped from titles. Cover images and other files next to a book move with it, and emptied folders are removed. Books that cannot be resolved are skipped and listed under "Needs attention".
 
 PDF, MOBI, AZW3, CBZ and CBR files are renamed from folder and file names only.
 

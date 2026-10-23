@@ -42,6 +42,8 @@ VOL_RE = re.compile(
 PART_RE = re.compile(
     r"[\s._-]*[\(\[]?\s*(?:part|pt|disc|disk|cd)\s*\d+(?:\s*of\s*\d+)?\s*[\)\]]?$", re.I
 )
+ID_TAIL_RE = re.compile(r"\s*\[(?:B0[0-9A-Z]{8}|[0-9]{9}[0-9Xx])\]\s*$")
+NOISE_DIRS = {"audiobooks", "audiobook", "books", "ebooks", "library", "audible", "libation", "audio"}
 PART_NUM_RE = re.compile(r"(?:part|pt|disc|disk|cd)\s*(\d+)", re.I)
 JUNK_TITLE_RE = re.compile(
     r"\s*[\(\[]\s*(?:unabridged|abridged|audiobook|dramatized adaptation)\s*[\)\]]\s*$",
@@ -134,13 +136,14 @@ def strip_part(s):
 def clean_title(t):
     if not t:
         return None
+    t = ID_TAIL_RE.sub("", t)
     t = JUNK_TITLE_RE.sub("", t)
     t = re.sub(r"\s*-\s*unabridged$", "", t, flags=re.I)
     return t.strip() or None
 
 
 def clean_author(name):
-    if not name:
+    if not name or ID_TAIL_RE.search(name):
         return None
     name = re.split(r"\s*(?:;|&|\band\b)\s*", name)[0].strip()
     if name.count(",") == 1:
@@ -700,10 +703,14 @@ def scan(root, exclude=()):
     for d in sorted(media_dirs, key=nat):
         media, allfiles = media_dirs[d]
         buckets = {}
+        companions = []
         for f in media:
             ext = os.path.splitext(f)[1].lower()
             stem = os.path.splitext(f)[0]
             path = os.path.join(d, f)
+            if ext == ".pdf" and any(os.path.splitext(m)[1].lower() in AUDIO_EXT for m in media):
+                companions.append((path, ext))
+                continue
             if ext in AUDIO_EXT:
                 tags = read_audio_tags(path)
                 if tags["album"]:
@@ -720,6 +727,14 @@ def scan(root, exclude=()):
                 )
                 key = ("b", norm(strip_part(stem)))
             buckets.setdefault(key, []).append((path, ext, tags))
+        if companions:
+            audio_keys = [k for k in buckets if k[0] == "a"]
+            empty = {"title": None, "author": None, "album": None, "series": None, "index": None}
+            for path, ext in companions:
+                if len(audio_keys) == 1:
+                    buckets[audio_keys[0]].append((path, ext, empty))
+                else:
+                    buckets.setdefault(("b", norm(strip_part(os.path.splitext(os.path.basename(path))[0]))), []).append((path, ext, empty))
         exclusive = d != root and d not in ancestors and len(buckets) == 1
         for items in buckets.values():
             groups.append(Group(d, items, exclusive, allfiles))
@@ -728,9 +743,10 @@ def scan(root, exclude=()):
 
 def path_guess(root, g):
     rel = os.path.relpath(g.directory, root)
-    parts = [] if rel == "." else rel.split(os.sep)
+    raw = [] if rel == "." else rel.split(os.sep)
+    parts = [x for x in raw if norm(x) not in NOISE_DIRS]
     first_stem = os.path.splitext(os.path.basename(g.items[0][0]))[0]
-    if g.exclusive and parts:
+    if g.exclusive and raw and norm(raw[-1]) not in NOISE_DIRS:
         name = parts[-1]
         ctx = parts[:-1]
     else:
@@ -771,6 +787,8 @@ def resolve(root, g, use_lookup, cache):
     series = pick("series") or guess["series"]
     index = parse_index(pick("index")) or guess["index"]
     if series and norm(series) == norm(title) and index is None:
+        series = None
+    if series and author and norm(series) == norm(author):
         series = None
     if use_lookup and title and (series is None or index is None):
         found = audible_lookup(title, author, cache)
