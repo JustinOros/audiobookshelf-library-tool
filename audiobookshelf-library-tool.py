@@ -41,8 +41,12 @@ VOL_RE = re.compile(
     re.I,
 )
 PART_RE = re.compile(
-    r"[\s._-]*[\(\[]?\s*(?:part|pt|disc|disk|cd)\s*\d+(?:\s*of\s*\d+)?\s*[\)\]]?$", re.I
+    r"[\s._-]*(?:[\(\[]\s*(?:(?:part|pt|disc|disk|cd)\s*\d+(?:\s*of\s*\d+)?|\d+\s*of\s*\d+)\s*[\)\]]"
+    r"|(?:part|pt|disc|disk|cd)\s*\d+(?:\s*of\s*\d+)?)$",
+    re.I,
 )
+OF_NUM_RE = re.compile(r"[\(\[]\s*(\d+)\s*of\s*\d+\s*[\)\]]\s*$", re.I)
+PART_WORDS = {"part", "pt", "disc", "disk", "cd", "of"}
 SERIES_SUFFIX_RE = re.compile(
     r"\s*[\[\(]\s*([^\]\)\d][^\]\)]*?)[,\s]+(?:book|vol\.?|volume|#)?\s*(\d+(?:\.\d+)?)\s*[\]\)]\s*$", re.I
 )
@@ -945,10 +949,18 @@ def resolve(root, g, use_lookup, cache):
 
 def plan_part_number(plan):
     path = plan.group.items[0][0]
-    m = PART_NUM_RE.search(os.path.splitext(os.path.basename(path))[0])
+    base = os.path.splitext(os.path.basename(path))[0]
+    m = PART_NUM_RE.search(base) or OF_NUM_RE.search(base)
     if m:
         return int(m.group(1))
     return None
+
+
+def part_tag_key(plan):
+    tags = plan.group.items[0][2] or {}
+    raw = tags.get("title") or tags.get("album") or ""
+    words = [w for w in norm(raw).split() if not w.isdigit() and w not in PART_WORDS]
+    return " ".join(words)
 
 
 def merge_parts(plans):
@@ -966,6 +978,12 @@ def merge_parts(plans):
     for entries in buckets.values():
         nums = [n for n, _ in entries]
         if len(entries) < 2 or len(set(nums)) != len(nums):
+            continue
+        keys = {part_tag_key(p) for _, p in entries}
+        keys.discard("")
+        if len(keys) > 1:
+            for _, p in entries:
+                p.note = "files look like separate books, not merged"
             continue
         for n, p in entries:
             p.part = n
