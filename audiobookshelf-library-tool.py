@@ -138,6 +138,7 @@ def clean_title(t):
     if not t:
         return None
     t = ID_TAIL_RE.sub("", t)
+    t = re.sub(r"(?<=\S)_\s+", ": ", t)
     t = JUNK_TITLE_RE.sub("", t)
     t = re.sub(r"\s*-\s*unabridged$", "", t, flags=re.I)
     return t.strip() or None
@@ -146,6 +147,7 @@ def clean_title(t):
 def clean_author(name):
     if not name or ID_TAIL_RE.search(name):
         return None
+    name = re.sub(r"[,\s]+(?:ph\.?\s?d|m\.?d)\.?$", "", name.strip(), flags=re.I)
     name = re.split(r"\s*(?:;|&|\band\b)\s*", name)[0].strip()
     if name.count(",") == 1:
         a, b = [p.strip() for p in name.split(",")]
