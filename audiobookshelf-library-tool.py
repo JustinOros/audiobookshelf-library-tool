@@ -671,20 +671,19 @@ def audible_search(params, title, author):
 
 
 def audible_lookup(title, author, cache):
-    key = norm(title) + "|" + norm(author)
-    if cache.get(key) is not None:
+    key = "v3|" + norm(title) + "|" + norm(author)
+    if key in cache:
         return cache[key]
     result, ok = audible_search({"title": title}, title, author)
     if not ok:
         return None
-    if result is None:
+    if result is None and not author:
         core = re.split(r"\s+-\s+|:|\(|\[", title)[0].strip()
         if core:
             result, ok = audible_search({"keywords": core}, title, author)
             if not ok:
                 return None
-    if result is not None:
-        cache[key] = result
+    cache[key] = result
     return result
 
 
