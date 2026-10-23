@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -106,7 +107,13 @@ def nat(s):
 
 
 def norm(s):
-    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+    s = unicodedata.normalize("NFKD", s or "")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def same_path(a, b):
+    return unicodedata.normalize("NFC", a) == unicodedata.normalize("NFC", b)
 
 
 def first(v):
@@ -824,7 +831,11 @@ def resolve(root, g, use_lookup, cache):
     title = strip_part(clean_title(title)) if title else None
     tag_title = bool(title)
     title = title or clean_title(guess["title"])
-    author = clean_author(pick("author")) or clean_author(guess["author"])
+    author = clean_author(pick("author"))
+    if not author:
+        author = clean_author(guess["author"])
+        if author and title and len(norm(author)) >= 3 and norm(title).startswith(norm(author)):
+            author = None
     series = pick("series") or guess["series"]
     index = parse_index(pick("index")) or guess["index"]
     if series and norm(series) == norm(title) and index is None:
@@ -857,6 +868,8 @@ def resolve(root, g, use_lookup, cache):
                 index = found["index"]
             if author is None:
                 author = clean_author(found["author"])
+    if series and author and norm(series) == norm(author):
+        series = None
     if not author:
         plan.status = "skip"
         plan.note = "no author found in tags, path or lookup"
@@ -1138,7 +1151,7 @@ def main():
         if p.status != "pending":
             continue
         for src, dst in p.moves:
-            if src == dst:
+            if same_path(src, dst):
                 continue
             if os.path.exists(dst):
                 try:
@@ -1150,7 +1163,7 @@ def main():
                 p.note = "target already exists: " + rel(dst, root)
                 break
         if p.status == "pending":
-            changed = any(s != d for s, d in p.moves)
+            changed = any(not same_path(s, d) for s, d in p.moves)
             p.status = "change" if changed else "ok"
 
     changes = [p for p in plans if p.status == "change"]
@@ -1161,7 +1174,7 @@ def main():
     for p in changes:
         print("")
         for src, dst in p.moves:
-            if src != dst:
+            if not same_path(src, dst):
                 print("  " + rel(src, root))
                 print("    -> " + rel(dst, root))
     print("")
@@ -1282,7 +1295,7 @@ def main():
         for p in changes:
             try:
                 for src, dst in p.moves:
-                    if src == dst:
+                    if same_path(src, dst):
                         continue
                     src_dirs.add(os.path.dirname(src))
                     do_move(src, dst)
