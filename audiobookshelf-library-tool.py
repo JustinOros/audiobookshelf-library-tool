@@ -43,6 +43,9 @@ VOL_RE = re.compile(
 PART_RE = re.compile(
     r"[\s._-]*[\(\[]?\s*(?:part|pt|disc|disk|cd)\s*\d+(?:\s*of\s*\d+)?\s*[\)\]]?$", re.I
 )
+SERIES_SUFFIX_RE = re.compile(
+    r"\s*[\[\(]\s*([^\]\)\d][^\]\)]*?)[,\s]+(?:book|vol\.?|volume|#)?\s*(\d+(?:\.\d+)?)\s*[\]\)]\s*$", re.I
+)
 ID_TAIL_RE = re.compile(r"\s*\[(?:B0[0-9A-Z]{8}|[0-9]{9}[0-9Xx])\]\s*$")
 ASIN_RE = re.compile(r"\[(B0[0-9A-Z]{8}|[0-9]{9}[0-9Xx])\]")
 NOISE_DIRS = {"audiobooks", "audiobook", "books", "ebooks", "library", "audible", "libation", "audio"}
@@ -141,9 +144,20 @@ def strip_part(s):
     return PART_RE.sub("", s).strip()
 
 
+def split_series_suffix(t):
+    m = SERIES_SUFFIX_RE.search(t or "")
+    if not m:
+        return t, None, None
+    name = m.group(1).strip()
+    if len(name) < 3 or re.match(r"(?i)^(part|pt|disc|disk|cd|book|vol|volume|unabridged|abridged)\b", name):
+        return t, None, None
+    return t[: m.start()].rstrip(), name, parse_index(m.group(2))
+
+
 def clean_title(t):
     if not t:
         return None
+    t = split_series_suffix(t)[0]
     t = ID_TAIL_RE.sub("", t)
     t = re.sub(r"(?<=\S)_\s+", ": ", t)
     t = JUNK_TITLE_RE.sub("", t)
@@ -860,6 +874,7 @@ def resolve(root, g, use_lookup, cache):
     else:
         title = pick("title") or pick("album")
     guess = path_guess(root, g)
+    _, hint_series, hint_index = split_series_suffix(ID_TAIL_RE.sub("", title or guess["title"] or ""))
     title = strip_part(clean_title(title)) if title else None
     tag_title = bool(title)
     title = title or clean_title(guess["title"])
@@ -868,8 +883,8 @@ def resolve(root, g, use_lookup, cache):
         author = clean_author(guess["author"])
         if author and title and len(norm(author)) >= 3 and norm(title).startswith(norm(author)):
             author = None
-    series = pick("series") or guess["series"]
-    index = parse_index(pick("index")) or guess["index"]
+    series = pick("series") or guess["series"] or hint_series
+    index = parse_index(pick("index")) or guess["index"] or (hint_index if hint_series else None)
     if series and norm(series) == norm(title) and index is None:
         series = None
     if series and author and norm(series) == norm(author):
