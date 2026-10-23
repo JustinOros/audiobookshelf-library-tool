@@ -707,7 +707,7 @@ def audible_lookup(title, author, cache):
 
 
 def audible_by_asin(asin, cache):
-    key = "asin:" + asin
+    key = "asin2:" + asin
     if cache.get(key) is not None:
         return cache[key]
     url = "https://api.audible.com/1.0/catalog/products/" + asin + "?" + urllib.parse.urlencode(
