@@ -1166,6 +1166,7 @@ def main():
     ap.add_argument("-y", "--yes", action="store_true", help="apply without confirmation")
     ap.add_argument("--fix-tags", action="store_true", help="only clean mapped characters out of audio file tags, then exit")
     ap.add_argument("--keep-duplicates", action="store_true", help="do not look for or remove identical duplicate files")
+    ap.add_argument("--duplicates-only", action="store_true", help="only list identical duplicate files, change nothing, then exit")
     ap.add_argument("--keep-unsupported", action="store_true", help="do not remove files Audiobookshelf cannot use")
     ap.add_argument("--keep-cue", action="store_true", help="do not remove .cue files")
     ap.add_argument("--strip-text", action="append", default=[], metavar="TEXT", help="also remove this text from inside epub files (repeatable)")
@@ -1178,6 +1179,19 @@ def main():
     if not os.path.isdir(root):
         print("Not a folder: " + root)
         sys.exit(1)
+
+    if args.duplicates_only:
+        print("Checking for duplicates in " + root)
+        found = find_duplicates(root)
+        if not found:
+            print("No identical duplicate files found")
+        for keep, drops in found:
+            print("  keep    " + rel(keep, root))
+            for d in drops:
+                print("  remove  " + rel(d, root))
+        print("")
+        print("Nothing was changed")
+        return
 
     if args.fix_tags:
         print(("DRY RUN: " if args.test else "") + "Checking tags in " + root)
