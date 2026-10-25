@@ -1167,6 +1167,7 @@ def main():
     ap.add_argument("--fix-tags", action="store_true", help="only clean mapped characters out of audio file tags, then exit")
     ap.add_argument("--keep-duplicates", action="store_true", help="do not look for or remove identical duplicate files")
     ap.add_argument("--duplicates-only", action="store_true", help="only list identical duplicate files, change nothing, then exit")
+    ap.add_argument("--strip-only", action="store_true", help="only remove watermark text from epubs, no renames, moves or deletions, then exit")
     ap.add_argument("--keep-unsupported", action="store_true", help="do not remove files Audiobookshelf cannot use")
     ap.add_argument("--keep-cue", action="store_true", help="do not remove .cue files")
     ap.add_argument("--strip-text", action="append", default=[], metavar="TEXT", help="also remove this text from inside epub files (repeatable)")
@@ -1191,6 +1192,32 @@ def main():
                 print("  remove  " + rel(d, root))
         print("")
         print("Nothing was changed")
+        return
+
+    if args.strip_only:
+        strip_texts = STRIP_TEXT + args.strip_text
+        print(("DRY RUN: " if args.test else "") + "Checking epubs in " + root + " for " + ", ".join(strip_texts))
+        strip_pending, epub_count, strip_patterns = collect_epub_strips(root, strip_texts)
+        if not strip_pending:
+            print("Checked " + str(epub_count) + " epubs, nothing to remove")
+            return
+        print("")
+        print_epub_strips(strip_pending, root)
+        print("")
+        print(str(len(strip_pending)) + " of " + str(epub_count) + " epubs contain text to remove")
+        if args.test:
+            print("Dry run, nothing was changed")
+            return
+        if not args.yes:
+            try:
+                answer = input("\nRemove the text from " + str(len(strip_pending)) + " epubs in " + root + "? [y/N] ").strip().lower()
+            except EOFError:
+                answer = ""
+            if answer not in ("y", "yes"):
+                print("Cancelled")
+                return
+        stripped, strip_errors = apply_epub_strips(strip_pending, strip_patterns, root)
+        print("Cleaned text in " + str(stripped) + " epubs" + (", " + str(strip_errors) + " failed" if strip_errors else ""))
         return
 
     if args.fix_tags:
